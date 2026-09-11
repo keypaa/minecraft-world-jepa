@@ -40,24 +40,27 @@ class MinecraftFrameStream(IterableDataset):
         shard_start: int = 0,
         shard_end: int = 2,
         target_size: int = DEFAULT_TARGET_SIZE,
+        resume_shard: int = 0,
+        resume_row: int = 0,
     ):
         self.shard_start = shard_start
         self.shard_end = shard_end
         self.target_size = target_size
+        self.resume_shard = resume_shard
+        self.resume_row = resume_row
 
     def __iter__(self) -> Iterator[torch.Tensor]:
-        num_iter = 0
-        while True:
-            for shard in range(self.shard_start, self.shard_end):
-                ds = load_dataset(
-                    TESS_REPO,
-                    split="train",
-                    streaming=True,
-                    data_files=f"data/shard_{shard:05d}.parquet",
-                )
-                for ex in ds:
-                    yield decode_jpeg(ex["image"], self.target_size)
-                    num_iter += 1
+        for shard in range(self.shard_start, self.shard_end):
+            ds = load_dataset(
+                TESS_REPO,
+                split="train",
+                streaming=True,
+                data_files=f"data/shard_{shard:05d}.parquet",
+            )
+            for row_idx, ex in enumerate(ds):
+                if shard == self.resume_shard and row_idx < self.resume_row:
+                    continue
+                yield decode_jpeg(ex["image"], self.target_size)
 
 
 class MinecraftFrameDataset:
@@ -115,7 +118,15 @@ class WorldModelStream(IterableDataset):
         return torch.load(path, map_location="cpu", weights_only=True)
 
     def __iter__(self):
+        if self.latent_dir is not None:
+            import warnings
+            warnings.warn("precomputed latents deprecated (9% gain); streaming frames", DeprecationWarning)
+        return self._iter_shards()
+
+    def _iter_shards(self):
         for shard in range(self.shard_start, self.shard_end):
+            if shard < self.resume_shard:
+                continue
             # Load pre-computed latents if available
             precomputed = None
             if self.latent_dir is not None:
@@ -133,7 +144,11 @@ class WorldModelStream(IterableDataset):
             item_kind = "latents" if precomputed is not None else "frames"
             buf_items, buf_actions = [], []
             last_video_id = None
-            for ex in ds:
+            for row_idx, ex in enumerate(ds):
+                if shard == self.resume_shard and row_idx < self.resume_row:
+                    if precomputed is not None:
+                        latent_index += 1
+                    continue
                 action_token = parse_lumine_action(ex["action"])
                 video_id = ex["video_id"]
 
