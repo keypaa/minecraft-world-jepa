@@ -9,6 +9,7 @@ Proves the full spine before committing GPU hours:
 Usage: python scripts/canary.py --config configs/stage1_4ctx.yaml
 """
 import argparse
+import gc
 from pathlib import Path
 
 CKPT_DIR = Path("checkpoints/canary")
@@ -44,7 +45,16 @@ def main():
     stream = MinecraftFrameStream(shard_start=0, shard_end=1, target_size=256)
     loader = DataLoader(stream, batch_size=4, num_workers=0, drop_last=True)
 
-    orig_batch = next(iter(loader)).cuda()
+    loader_it = iter(loader)
+    try:
+        orig_batch = next(loader_it).cuda()
+    finally:
+        # Deterministically release the suspended infinite stream (open HF
+        # download). Relying on interpreter teardown hangs: abandoned download
+        # threads keep the process alive after CANARY PASSED.
+        del loader_it
+        del loader
+        gc.collect()
     with torch.no_grad():
         z = encode_frames(vae, orig_batch)
         recon = decode_latents(vae, z)
@@ -92,17 +102,32 @@ def main():
         streaming=True,
         data_files="data/shard_00000.parquet",
     )
-    for i, ex in enumerate(ds):
-        if i >= 2000:
-            break
-        token = parse_lumine_action(ex["action"])
-        counts[token] = counts.get(token, 0) + 1
-        if token <= 21:
-            keyboard_pressed += 1
-        elif token <= 27:
-            camera_only += 1
-        else:
-            noop += 1
+    ds_iter = iter(ds)
+    try:
+        for i, ex in enumerate(ds_iter):
+            if i >= 2000:
+                break
+            token = parse_lumine_action(ex["action"])
+            counts[token] = counts.get(token, 0) + 1
+            if token <= 21:
+                keyboard_pressed += 1
+            elif token <= 27:
+                camera_only += 1
+            else:
+                noop += 1
+    finally:
+        # Same as Phase 1: breaking out early abandons a live HF download.
+        # GeneratorExit at the suspended yield lets datasets/fsspec release
+        # the connection instead of hanging interpreter exit.
+        close = getattr(ds_iter, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        del ds_iter
+        del ds
+        gc.collect()
 
     total = keyboard_pressed + camera_only + noop
     print(f"  Keyboard (0-21):     {keyboard_pressed:5d}  ({100*keyboard_pressed/total:.1f}%)")
@@ -149,7 +174,13 @@ def main():
         collate_fn=collate_stream,
         num_workers=0, drop_last=True,
     )
-    batch = next(iter(wm_loader))
+    wm_loader_it = iter(wm_loader)
+    try:
+        batch = next(wm_loader_it)
+    finally:
+        del wm_loader_it
+        del wm_loader
+        gc.collect()
 
     has_latents = "latents" in batch
     if not has_latents:
@@ -210,6 +241,21 @@ def main():
         print("  [OK]  World model forward pass + loss finite")
         print("  [OK]  Checkpoint round-trip verified")
     print("=" * 60)
+
+    # ── Teardown: free GPU allocations deterministically ──
+    # The canary ends with ~8GB live (2x 338M models + VAE + latents).
+    # Releasing before return avoids CUDA-teardown hangs on exit.
+    try:
+        del model, model2, vae, trainer, trainer2
+    except NameError:
+        pass
+    try:
+        del latents, pred, pred2
+    except NameError:
+        pass
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    gc.collect()
 
 
 if __name__ == "__main__":
