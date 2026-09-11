@@ -34,6 +34,7 @@ class Trainer:
         model_cfg = config.get("model", {})
         self.target_size = data_cfg.get("target_size", 256)
         self.latent_grid_size = model_cfg.get("latent_grid_size", self.target_size // 8)
+        assert self.target_size // 8 == self.latent_grid_size
 
         self.optimizer = AdamW(
             model.parameters(),
@@ -41,13 +42,14 @@ class Trainer:
             weight_decay=train_cfg.get("weight_decay", config.get("weight_decay", 0.05)),
             betas=tuple(train_cfg.get("betas", (0.9, 0.95))),
         )
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=max(1, config.get("epochs", 10) * 1000))
 
         self.epoch = 0
         self.step = 0
         self.best_loss = float("inf")
         self.loss_history = []  # tracked per-epoch for diagnostics
 
-    def train(self, stream, batch_size=8, num_epochs=10):
+    def train(self, stream, batch_size=8, num_epochs=10, steps_per_epoch=None, max_steps=None):
         self.model.train()
         num_patches = getattr(self.model, "num_patches", 256)
 
@@ -67,6 +69,8 @@ class Trainer:
             epoch_start = time.time()
 
             for batch in loader:
+                if steps_per_epoch is not None and num_batches >= steps_per_epoch:
+                    break
                 actions = batch["actions"].cuda()
                 assert_action_tensor(actions, name="batch actions")
 
@@ -101,6 +105,7 @@ class Trainer:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
+                self.scheduler.step()
 
                 if torch.isnan(loss) or torch.isinf(loss):
                     raise ValueError(f"Loss diverged at step {self.step}: {loss.item()}")
@@ -108,6 +113,8 @@ class Trainer:
                 epoch_loss += loss.item()
                 num_batches += 1
                 self.step += 1
+                if max_steps is not None and self.step >= max_steps:
+                    break
 
             if num_batches == 0:
                 raise ValueError("Training stream produced no batches")
@@ -127,6 +134,8 @@ class Trainer:
             )
             torch.cuda.reset_peak_memory_stats()
             self.save_checkpoint(avg_loss)
+            if max_steps is not None and self.step >= max_steps:
+                break
 
     def save_checkpoint(self, loss):
         ckpt = {
