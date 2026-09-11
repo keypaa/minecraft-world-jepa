@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.tensor_contracts import assert_frame_tensor, assert_latent_tensor
+from mw_jepa.tensor_contracts import assert_frame_tensor, assert_latent_tensor
 
 
 def encode_frames(vae: nn.Module, frames: torch.Tensor) -> torch.Tensor:

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from src.tensor_contracts import assert_action_tensor, assert_latent_tensor
+from mw_jepa.tensor_contracts import assert_action_tensor, assert_latent_tensor
 
 
 class LatentPatchEmbed(nn.Module):

@@ -6,8 +6,8 @@ from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.amp import autocast
 
-from src.tensor_contracts import assert_action_tensor, assert_frame_tensor, assert_latent_tensor
-from src.vae import encode_frames
+from mw_jepa.tensor_contracts import assert_action_tensor, assert_frame_tensor, assert_latent_tensor
+from mw_jepa.vae import encode_frames
 
 
 def collate_stream(batch):

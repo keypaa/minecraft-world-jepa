@@ -2,7 +2,7 @@ import modal
 from pathlib import Path
 
 from image_modal import world_model_image, vae_image, inference_image
-from src.config import load_config
+from mw_jepa.config import load_config
 
 app = modal.App("minecraft-world-model")
 
@@ -35,8 +35,8 @@ def train_vae(
 ):
     """Fine-tune VAE on streaming TESS VLA frames."""
     import torch
-    from src.vae import load_vae, finetune_vae
-    from src.data import MinecraftFrameStream
+    from mw_jepa.vae import load_vae, finetune_vae
+    from mw_jepa.data import MinecraftFrameStream
     from torch.utils.data import DataLoader
 
     # Optional W&B — no crash if unauthenticated
@@ -84,8 +84,8 @@ def evaluate_vae(
 ):
     """Evaluate VAE reconstruction quality on a held-out shard."""
     import torch
-    from src.vae import load_vae, evaluate_vae as run_eval
-    from src.data import MinecraftFrameStream
+    from mw_jepa.vae import load_vae, evaluate_vae as run_eval
+    from mw_jepa.data import MinecraftFrameStream
     from torch.utils.data import DataLoader
 
     vae = load_vae(device="cuda")
@@ -124,8 +124,8 @@ def compute_latent_stats(
 ):
     """Compute channel-wise mean/std of VAE latents for normalization."""
     import torch
-    from src.vae import load_vae
-    from src.data import LatentStatsComputer
+    from mw_jepa.vae import load_vae
+    from mw_jepa.data import LatentStatsComputer
 
     vae = load_vae(device="cuda")
     computer = LatentStatsComputer(vae=vae, shard_start=shard_start, shard_end=shard_end, target_size=256)
@@ -174,8 +174,8 @@ def precompute_latents(
     """
     import torch
     from pathlib import Path
-    from src.vae import encode_frames, load_vae
-    from src.data import MinecraftFrameStream
+    from mw_jepa.vae import encode_frames, load_vae
+    from mw_jepa.data import MinecraftFrameStream
     from torch.utils.data import DataLoader
 
     vae = load_vae(device="cuda")
@@ -230,9 +230,9 @@ def train_world_model(
     """Train world model. Streams data from TESS VLA on HuggingFace."""
     import torch
     from pathlib import Path
-    from src.world_model import MineWorldModel
-    from src.data import WorldModelStream
-    from src.trainer import Trainer
+    from mw_jepa.world_model import MineWorldModel
+    from mw_jepa.data import WorldModelStream
+    from mw_jepa.trainer import Trainer
 
     if config_path is None:
         config_path = str(Path(__file__).parent / "configs" / "stage1_4ctx.yaml")
@@ -254,7 +254,7 @@ def train_world_model(
     if use_precomputed_latents:
         vae = None
     else:
-        from src.vae import load_vae
+        from mw_jepa.vae import load_vae
         vae = load_vae(device="cuda")
 
     train_stream = WorldModelStream(
@@ -309,8 +309,8 @@ class WorldModelInference:
     @modal.enter()
     def load_models(self):
         import torch
-        from src.world_model import MineWorldModel
-        from src.vae import load_vae
+        from mw_jepa.world_model import MineWorldModel
+        from mw_jepa.vae import load_vae
 
         self.device = torch.device("cuda")
         self.vae = load_vae(device=self.device)
@@ -343,7 +343,7 @@ class WorldModelInference:
     def step(self, data: dict):
         import torch
         import numpy as np
-        from src.vae import decode_latents
+        from mw_jepa.vae import decode_latents
 
         latent_history = torch.tensor(
             data["latent_history"], device=self.device, dtype=torch.float32
@@ -381,7 +381,7 @@ class WorldModelInference:
     def reset(self, data: dict):
         import torch
         import numpy as np
-        from src.vae import encode_frames
+        from mw_jepa.vae import encode_frames
 
         seed = np.array(data["seed_frame"], dtype=np.float32)
         if seed.max() > 1.0:
@@ -425,12 +425,12 @@ def run_canary():
     from torchvision.utils import make_grid, save_image
     from datasets import load_dataset
 
-    from src.vae import load_vae, encode_frames, decode_latents
-    from src.data import MinecraftFrameStream, WorldModelStream
-    from src.world_model import MineWorldModel
-    from src.trainer import Trainer, collate_stream
-    from src.action_tokenizer import parse_lumine_action, KEYBOARD_TOKENS
-    from src.config import load_config
+    from mw_jepa.vae import load_vae, encode_frames, decode_latents
+    from mw_jepa.data import MinecraftFrameStream, WorldModelStream
+    from mw_jepa.world_model import MineWorldModel
+    from mw_jepa.trainer import Trainer, collate_stream
+    from mw_jepa.action_tokenizer import parse_lumine_action, KEYBOARD_TOKENS
+    from mw_jepa.config import load_config
 
     jepa_root = Path(__file__).parent / "jepa"
 
@@ -647,12 +647,12 @@ def test_overfit(
     from torchvision.utils import make_grid, save_image
     from datasets import load_dataset
 
-    from src.vae import load_vae, encode_frames, decode_latents
-    from src.data import decode_jpeg, TESS_REPO
-    from src.action_tokenizer import parse_lumine_action, KEYBOARD_TOKENS
-    from src.world_model import MineWorldModel
-    from src.trainer import Trainer, collate_stream
-    from src.config import load_config
+    from mw_jepa.vae import load_vae, encode_frames, decode_latents
+    from mw_jepa.data import decode_jpeg, TESS_REPO
+    from mw_jepa.action_tokenizer import parse_lumine_action, KEYBOARD_TOKENS
+    from mw_jepa.world_model import MineWorldModel
+    from mw_jepa.trainer import Trainer, collate_stream
+    from mw_jepa.config import load_config
 
     jepa_root = Path(__file__).parent / "jepa"
 

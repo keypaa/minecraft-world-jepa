@@ -13,7 +13,7 @@ import torch
 from pathlib import Path
 
 from image_modal import world_model_image
-from src.config import load_config
+from mw_jepa.config import load_config
 
 app = modal.App("measure-step-time")
 
@@ -42,13 +42,13 @@ def measure_real_data():
     print(f"Tokens per step: {B} * {T} * 256 = {B * T * 256}")
 
     # --- Load VAE ---
-    from src.vae import load_vae, encode_frames
+    from mw_jepa.vae import load_vae, encode_frames
     print("\nLoading VAE...")
     vae = load_vae(device="cuda").eval()
     print(f"  VAE loaded ({sum(p.numel() for p in vae.parameters()):,} params)")
 
     # --- Load world model ---
-    from src.world_model import MineWorldModel
+    from mw_jepa.world_model import MineWorldModel
     print("Loading world model...")
     model = MineWorldModel(**model_cfg).cuda().train()
     print(f"  Model loaded ({sum(p.numel() for p in model.parameters()):,} params)")
@@ -56,9 +56,9 @@ def measure_real_data():
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.05)
 
     # --- Stream real data ---
-    from src.data import WorldModelStream
+    from mw_jepa.data import WorldModelStream
     from torch.utils.data import DataLoader
-    from src.trainer import collate_stream
+    from mw_jepa.trainer import collate_stream
 
     print(f"\nStreaming from shard 0 (target_size={data_cfg['target_size']})...")
     stream = WorldModelStream(

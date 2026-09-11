@@ -15,7 +15,7 @@ import torch
 from pathlib import Path
 
 from image_modal import world_model_image
-from src.config import load_config
+from mw_jepa.config import load_config
 
 app = modal.App("measure-step-time")
 
@@ -63,7 +63,7 @@ def measure():
     print(f"Tokens per step: {B} * {T} * 256 = {B * T * 256}")
 
     # --- Model init ---
-    from src.world_model import MineWorldModel
+    from mw_jepa.world_model import MineWorldModel
     model = MineWorldModel(**model_cfg).cuda().train()
 
     param_count = sum(p.numel() for p in model.parameters())
@@ -132,7 +132,7 @@ def measure():
 
     # --- VAE encode timing ---
     print(f"\n--- VAE Encode Timing (batch={B}) ---")
-    from src.vae import load_vae, encode_frames
+    from mw_jepa.vae import load_vae, encode_frames
     vae = load_vae(device="cuda").eval()
     vae_param_count = sum(p.numel() for p in vae.parameters())
 

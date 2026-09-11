@@ -3,10 +3,10 @@ import sys
 sys.path.insert(0, ".")
 import torch
 
-from src.action_tokenizer import parse_lumine_action
-from src.config import load_config
-from src.trainer import collate_stream
-from src.world_model import MineWorldModel
+from mw_jepa.action_tokenizer import parse_lumine_action
+from mw_jepa.config import load_config
+from mw_jepa.trainer import collate_stream
+from mw_jepa.world_model import MineWorldModel
 
 cfg = load_config("configs/stage1_4ctx.yaml")
 assert cfg["model"]["latent_grid_size"] == 32

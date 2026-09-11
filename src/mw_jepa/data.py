@@ -9,8 +9,8 @@ import torch
 from torch.utils.data import DataLoader, IterableDataset
 from datasets import load_dataset
 
-from src.action_tokenizer import parse_lumine_action, CameraQuantizer
-from src.tensor_contracts import assert_action_tensor, assert_frame_tensor, assert_latent_tensor
+from mw_jepa.action_tokenizer import parse_lumine_action, CameraQuantizer
+from mw_jepa.tensor_contracts import assert_action_tensor, assert_frame_tensor, assert_latent_tensor
 
 TESS_REPO = "TESS-Computer/minecraft-vla-stage1"
 TESS_SHARDS = 303
@@ -187,7 +187,7 @@ class LatentStatsComputer:
         self.target_size = target_size
 
     def compute(self, num_samples: int = 5000) -> dict:
-        from src.vae import encode_frames
+        from mw_jepa.vae import encode_frames
 
         ds = MinecraftFrameStream(self.shard_start, self.shard_end, target_size=self.target_size)
         loader = DataLoader(ds, batch_size=32, num_workers=0)
