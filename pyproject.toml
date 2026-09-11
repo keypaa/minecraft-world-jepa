@@ -1,0 +1,32 @@
+[project]
+name = "minecraft-world-jepa"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "torch>=2.5.0",
+  "torchvision>=0.20.0",
+  "einops",
+  "datasets",
+  "pyarrow",
+  "opencv-python-headless",
+  "safetensors",
+  "diffusers",
+  "transformers",
+  "tqdm",
+  "numpy",
+  "scipy",
+  "pyyaml",
+  "pillow",
+  "pygame",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+experiments = ["lpips", "wandb", "accelerate", "hydra-core"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
