@@ -24,6 +24,13 @@ dependencies = [
 dev = ["pytest", "ruff"]
 experiments = ["lpips", "wandb", "accelerate", "hydra-core"]
 
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

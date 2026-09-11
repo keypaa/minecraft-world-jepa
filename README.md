@@ -61,6 +61,10 @@ tests/            contracts, data, vae, world model, action tokenizer
 Inference keeps a rolling context (default 16) and re-grounds on the
 latest decoded frame every 32 steps to bound autoregressive drift.
 
+Normalization is intentionally disabled by default: checkpoints carry no
+mean/std, so inference runs unnormalized. See `vae_experiments.py` for
+future latent-stats work.
+
 ## Gates
 
 - `make test` — CPU-only unit tests, must pass.

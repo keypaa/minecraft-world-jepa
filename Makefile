@@ -3,7 +3,7 @@ lint:
 	ruff check src scripts tests
 	ruff format --check src scripts tests
 test:
-	pytest -q
+	PYTHONPATH=src pytest -q
 canary:
 	python scripts/canary.py --config configs/stage1_4ctx.yaml
 overfit:

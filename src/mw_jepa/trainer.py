@@ -42,7 +42,9 @@ class Trainer:
             weight_decay=train_cfg.get("weight_decay", config.get("weight_decay", 0.05)),
             betas=tuple(train_cfg.get("betas", (0.9, 0.95))),
         )
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=max(1, config.get("epochs", 10) * 1000))
+        # heuristic: epochs*1000 steps; pass explicit T_max via config["training"]["t_max"] if set
+        t_max = train_cfg.get("t_max", max(1, config.get("epochs", 10) * 1000))
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=t_max)
 
         self.epoch = 0
         self.step = 0
@@ -141,9 +143,11 @@ class Trainer:
         ckpt = {
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
             "epoch": self.epoch,
             "step": self.step,
             "loss": loss,
+            "best_loss": min(loss, self.best_loss),
             "config": self.config,
         }
         path = self.ckpt_dir / f"epoch_{self.epoch:04d}_loss_{loss:.6f}.pt"
@@ -156,11 +160,15 @@ class Trainer:
         torch.save(ckpt, self.ckpt_dir / "latest.pt")
 
     def load_checkpoint(self, path: str):
-        ckpt = torch.load(path, map_location="cuda")
+        ckpt = torch.load(path, map_location="cuda", weights_only=False)  # trusted local checkpoint
         self.model.load_state_dict(ckpt["model"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
+        if ckpt.get("scheduler") is not None:
+            self.scheduler.load_state_dict(ckpt["scheduler"])
         self.epoch = ckpt["epoch"]
         self.step = ckpt["step"]
+        if ckpt.get("best_loss") is not None:
+            self.best_loss = ckpt["best_loss"]
         print(f"Resumed from epoch {self.epoch} (step {self.step}, loss {ckpt['loss']:.6f})")
 
 

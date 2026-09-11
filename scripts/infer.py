@@ -30,7 +30,9 @@ REGROUND_EVERY = 32
 
 
 def load_engine(ckpt_path: str, config_path: str | None, device: str) -> InferenceEngine:
-    ckpt = torch.load(ckpt_path, map_location=device)
+    ckpt = torch.load(
+        ckpt_path, map_location=device, weights_only=False
+    )  # trusted local checkpoint
     if config_path:
         cfg = load_config(config_path)
     else:
@@ -48,6 +50,7 @@ def load_engine(ckpt_path: str, config_path: str | None, device: str) -> Inferen
     context = cfg.get("context", 16)
     engine = InferenceEngine(model, vae, mean=mean, std=std, context=context, device=device)
     target_size = cfg.get("data", {}).get("target_size", 256)
+    engine.target_size = target_size
     seed = torch.zeros(1, 3, target_size, target_size)
     engine.reset(seed)
     return engine
@@ -68,7 +71,8 @@ def main():
     engine = load_engine(args.ckpt, args.config, args.device)
 
     pygame.init()
-    screen = pygame.display.set_mode((256, 256))
+    display_size = getattr(engine, "target_size", 256)
+    screen = pygame.display.set_mode((display_size, display_size))
     pygame.display.set_caption("minecraft-world-jepa (WASD+space, ESC quits)")
     clock = pygame.time.Clock()
     name_to_pygame = {

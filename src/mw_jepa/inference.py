@@ -8,7 +8,8 @@ class InferenceEngine:
     def __init__(self, model, vae, mean=None, std=None, context=16, device="cuda"):
         self.model = model.eval().to(device)
         self.vae = vae.eval().to(device)
-        self.mean, self.std = mean, std
+        self.mean = mean.view(1, 4, 1, 1) if mean is not None else None
+        self.std = std.view(1, 4, 1, 1) if std is not None else None
         self.context = context
         self.device = torch.device(device)
         self.buf = []
@@ -21,15 +22,11 @@ class InferenceEngine:
         self.buf = [z.squeeze(0)]
 
     def step(self, action_token: int):
-        import torch as _t
-
-        hist = _t.stack(self.buf[-self.context :])
+        hist = torch.stack(self.buf[-self.context :])
         if hist.shape[0] < self.context:
-            hist = _t.cat([hist[0:1].expand(self.context - hist.shape[0], -1, -1, -1), hist], dim=0)
-        if self.mean is not None:
-            pass
-        acts = _t.full((1, self.context), action_token, dtype=_t.long, device=self.device)
-        with _t.no_grad():
+            hist = torch.cat([hist[0:1].expand(self.context - hist.shape[0], -1, -1, -1), hist], dim=0)
+        acts = torch.full((1, self.context), action_token, dtype=torch.long, device=self.device)
+        with torch.no_grad():
             nxt = self.model(hist.unsqueeze(0), acts)
             raw = nxt
             if self.mean is not None:

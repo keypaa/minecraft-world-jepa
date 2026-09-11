@@ -28,7 +28,9 @@ def main():
     if args.use_finetuned:
         ckpt_path = Path(args.ckpt)
         if ckpt_path.exists():
-            vae.load_state_dict(torch.load(ckpt_path))
+            vae.load_state_dict(
+                torch.load(ckpt_path, weights_only=False)
+            )  # trusted local checkpoint
             print(f"Loaded fine-tuned VAE from {ckpt_path}")
         else:
             print("No fine-tuned checkpoint found, using base VAE")

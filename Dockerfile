@@ -6,5 +6,5 @@ COPY src/ src/
 COPY scripts/ scripts/
 COPY configs/ configs/
 RUN pip install -e ".[dev]"
-ENV PYTHONPATH=/work PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/work/src PYTHONUNBUFFERED=1
 CMD ["python", "scripts/train.py", "--config", "configs/stage1_4ctx.yaml"]
