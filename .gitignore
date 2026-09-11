@@ -25,3 +25,9 @@ runs/
 
 # Modal
 .modal/
+
+# Git worktrees (isolated implementation workspaces)
+.worktrees/
+
+# SDD scratch (plan ledgers, briefs, review packages)
+.superpowers/
