@@ -24,6 +24,11 @@ python scripts/train.py --config configs/stage1_4ctx.yaml
 python scripts/infer.py --ckpt checkpoints/<run>/best.pt  # WASD+space, ESC quits
 ```
 
+No `make` on your box? Prefix every target with `PYTHONPATH=src` and
+run the recipe directly, e.g. `PYTHONPATH=src pytest -q` instead of
+`make test`, `PYTHONPATH=src python scripts/canary.py --config
+configs/stage1_4ctx.yaml` instead of `make canary`.
+
 ## Measured numbers (do not edit without re-measuring)
 
 All from the 2026-06-10 canary on a PRO 6000 (96 GiB), 338,431,520-param
