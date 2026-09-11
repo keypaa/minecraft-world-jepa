@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+import os
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -55,6 +56,12 @@ class Trainer:
         self.step = 0
         self.best_loss = float("inf")
         self.loss_history = []  # tracked per-epoch for diagnostics
+        # Crash safety: epoch-only checkpointing loses hours on ~8K-step
+        # epochs. Save latest.pt every N steps + optionally mirror to Hub.
+        self.save_every_steps = int(train_cfg.get("save_every_steps", 500))
+        self.hf_repo_id = train_cfg.get("hf_repo_id") or os.environ.get("HF_HUB_REPO")
+        self.run_name = config.get("run_name", "run")
+        self._hub_warned = False
 
     def train(self, stream, batch_size=8, num_epochs=10, steps_per_epoch=None, max_steps=None):
         self.model.train()
@@ -148,6 +155,9 @@ class Trainer:
                     )
                 if max_steps is not None and self.step >= max_steps:
                     break
+                if self.save_every_steps > 0 and self.step % self.save_every_steps == 0:
+                    self.save_latest(epoch_loss / num_batches)
+                    self.maybe_push_to_hub()
 
             if use_bar:
                 pbar.close()
@@ -193,6 +203,51 @@ class Trainer:
             torch.save(ckpt, self.ckpt_dir / "best.pt")
 
         torch.save(ckpt, self.ckpt_dir / "latest.pt")
+
+    def save_latest(self, running_avg_loss: float):
+        """Overwrite latest.pt with current state (cheap periodic safety net).
+
+        Unlike save_checkpoint(), this writes no epoch file and never touches
+        best.pt — a death costs at most save_every_steps of work.
+        """
+        ckpt = {
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "epoch": self.epoch,
+            "step": self.step,
+            "loss": running_avg_loss,
+            "best_loss": self.best_loss,
+            "config": self.config,
+        }
+        torch.save(ckpt, self.ckpt_dir / "latest.pt")
+        print(f"  [ckpt] step {self.step} → latest.pt (loss {running_avg_loss:.4f})", flush=True)
+
+    def maybe_push_to_hub(self):
+        """Mirror latest.pt to the HuggingFace Hub (best-effort, never fatal).
+
+        Enabled by training.hf_repo_id in config or HF_HUB_REPO env var.
+        Auth via HF_TOKEN env var (HfApi picks it up automatically).
+        Covers total local-disk loss (ephemeral sandboxes): resume anywhere
+        with scripts/train.py --resume <downloaded latest.pt>.
+        """
+        if not self.hf_repo_id:
+            return
+        try:
+            from huggingface_hub import HfApi
+
+            api = HfApi()
+            api.upload_file(
+                path_or_fileobj=str(self.ckpt_dir / "latest.pt"),
+                path_in_repo=f"{self.run_name}/latest.pt",
+                repo_id=self.hf_repo_id,
+                repo_type="model",
+            )
+            print(f"  [hub] pushed step {self.step} → {self.hf_repo_id}:{self.run_name}/latest.pt", flush=True)
+        except Exception as e:
+            if not self._hub_warned:
+                print(f"  [hub] push failed (continuing locally): {e}", flush=True)
+                self._hub_warned = True
 
     def load_checkpoint(self, path: str):
         ckpt = torch.load(path, map_location="cuda", weights_only=False)  # trusted local checkpoint

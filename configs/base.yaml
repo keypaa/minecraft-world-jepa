@@ -17,6 +17,8 @@ training:
   precision: bf16
   log_freq: 100
   save_freq: 1000
+  save_every_steps: 500  # overwrite latest.pt this often (~10 min at 1.2s/step)
+  # hf_repo_id: "keypaa/minecraft-world-jepa-ckpts"  # + HF_TOKEN env: mirror latest.pt to Hub
 data:
   target_size: 256
   chunk_size: 32
