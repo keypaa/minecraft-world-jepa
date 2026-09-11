@@ -1,0 +1,45 @@
+# 512×512 CONFIG — FOR REFERENCE ONLY, NOT FOR CURRENT USE
+# ======================================================================
+# Why NOT use 512×512 right now:
+# - 64×64 latent grid, patch_size=2 → 1024 tokens/frame (4× 256×256, 16× 128×128)
+# - Need 1B+ params to model 1024-token frames well
+# - Won't fit on single A10G/PRO 6000 (attention O(n²) explodes VRAM)
+# - Requires H100:2 minimum ($7.90/h) or FSDP across 2+ GPUs
+# - Estimated training: ~120h total, ~$500-1000
+#
+# When to revisit:
+# - After 256×256 model proves out and you want sharper output
+# - Only if you have H100 budget and multi-GPU setup
+# ======================================================================
+model:
+  latent_dim: 4
+  patch_size: 2
+  latent_grid_size: 64
+  embed_dim: 2048
+  num_blocks: 24
+  num_heads: 16
+  max_frames: 16
+  num_actions: 29
+  action_embed_dim: 512
+
+training:
+  weight_decay: 0.05
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  precision: bf16
+  log_freq: 100
+  save_freq: 1000
+
+data:
+  target_size: 512
+  chunk_size: 16
+  latent_stats: /volumes/data/latent_stats.pt
+
+vae:
+  model_name: sd-vae
+  ckpt_path: /volumes/vae-checkpoints/vae-finetune-v1.pt
+
+# Stages — more steps needed due to larger token space
+# Stage 1: 4-ctx, lr=3e-4, batch_size=8  (4 × 1024 = 4096 tokens)
+# Stage 2: 8-ctx, lr=2e-4, batch_size=4  (8 × 1024 = 8192 tokens)
+# Stage 3: 16-ctx, lr=1e-4, batch_size=2  (16 × 1024 = 16384 tokens)

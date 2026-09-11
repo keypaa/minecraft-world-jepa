@@ -1,0 +1,20 @@
+# Stage 4: 32-frame context (final)
+# 256×256, 32 frames × 256 tokens = 8,192 tokens total
+# Largest memory: ~8GB for activations on PRO 6000 (96GB — comfortable)
+inherits: base
+context: 32
+lr: 0.00005
+batch_size: 4
+run_name: world-model-stage4-32ctx
+epochs: 10
+lr_reset: true
+resume: best.pt
+
+# 128×128 reference:
+# context: 32
+# lr: 0.00005
+# batch_size: 8
+# run_name: world-model-stage4-32ctx
+# epochs: 10
+# lr_reset: true
+# resume: best.pt

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Checkpoints / large artifacts (local only, never commit)
+checkpoints/
+*.pt
+*.safetensors
+latents/
+*.log
+
+# W&B
+wandb/
+runs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Modal
+.modal/

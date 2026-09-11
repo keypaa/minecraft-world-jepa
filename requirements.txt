@@ -1,0 +1,29 @@
+# Local development dependencies (CPU-compatible versions)
+# GPU dependencies are installed inside Modal containers via image.py
+
+# Core ML
+torch>=2.3
+torchvision>=0.18
+einops
+
+# Data
+decord
+opencv-python-headless
+safetensors
+lmdb
+msgpack
+datasets
+
+# Training
+accelerate
+wandb
+hydra-core
+pyyaml
+modal>=1.4
+
+# Utils
+numpy
+tqdm
+scipy
+pygame  # For local inference client testing
+pillow

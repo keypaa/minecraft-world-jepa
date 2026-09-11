@@ -1,0 +1,19 @@
+# Stage 3: 16-frame context
+# 256×256, 16 frames × 256 tokens = 4,096 tokens total
+inherits: base
+context: 16
+lr: 0.0001
+batch_size: 8
+run_name: world-model-stage3-16ctx
+epochs: 5
+lr_reset: true
+resume: best.pt
+
+# 128×128 reference:
+# context: 16
+# lr: 0.0001
+# batch_size: 16
+# run_name: world-model-stage3-16ctx
+# epochs: 5
+# lr_reset: true
+# resume: best.pt
