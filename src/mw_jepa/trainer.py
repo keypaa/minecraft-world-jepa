@@ -9,6 +9,11 @@ from torch.amp import autocast
 from mw_jepa.tensor_contracts import assert_action_tensor, assert_frame_tensor, assert_latent_tensor
 from mw_jepa.vae import encode_frames
 
+try:
+    from tqdm import tqdm
+except ImportError:  # minimal envs: fall back to silent iteration
+    tqdm = None
+
 
 def collate_stream(batch):
     """Collate function for WorldModelStream (handles frames or pre-computed latents)."""
@@ -70,7 +75,20 @@ class Trainer:
             tokens_processed = 0
             epoch_start = time.time()
 
-            for batch in loader:
+            use_bar = tqdm is not None
+            pbar = (
+                tqdm(
+                    loader,
+                    desc=f"Epoch {epoch + 1}/{num_epochs}",
+                    unit="step",
+                    total=steps_per_epoch,
+                    mininterval=1.0,
+                    leave=True,
+                )
+                if use_bar
+                else loader
+            )
+            for batch in pbar:
                 if steps_per_epoch is not None and num_batches >= steps_per_epoch:
                     break
                 actions = batch["actions"].cuda()
@@ -115,8 +133,24 @@ class Trainer:
                 epoch_loss += loss.item()
                 num_batches += 1
                 self.step += 1
+                if use_bar:
+                    elapsed = time.time() - epoch_start
+                    pbar.set_postfix(
+                        {
+                            "loss": f"{epoch_loss / num_batches:.4f}",
+                            "tok/s": f"{tokens_processed / elapsed:.0f}" if elapsed > 0 else "n/a",
+                            "GiB": (
+                                f"{torch.cuda.memory_allocated() / (1024 ** 3):.1f}"
+                                if torch.cuda.is_available()
+                                else "n/a"
+                            ),
+                        }
+                    )
                 if max_steps is not None and self.step >= max_steps:
                     break
+
+            if use_bar:
+                pbar.close()
 
             if num_batches == 0:
                 raise ValueError("Training stream produced no batches")
@@ -132,7 +166,8 @@ class Trainer:
             print(
                 f"Epoch {epoch + 1}/{num_epochs} — Loss: {avg_loss:.6f} | "
                 f"{steps_per_sec:.2f} st/s | {tokens_per_sec:.0f} tok/s | "
-                f"GPU: {gpu_mem:.1f} GiB"
+                f"GPU: {gpu_mem:.1f} GiB",
+                flush=True,
             )
             torch.cuda.reset_peak_memory_stats()
             self.save_checkpoint(avg_loss)
