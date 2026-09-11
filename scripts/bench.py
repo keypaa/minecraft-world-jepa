@@ -141,12 +141,12 @@ def bench_synthetic(config, num_steps=6):
 
     total_step = avg_steady + vae_time
     total_h = steps_per_epoch * epochs * total_step / 3600
-    print(f"\n--- With On-the-Fly VAE Encode ---")
+    print("\n--- With On-the-Fly VAE Encode ---")
     print(f"Combined step:         {avg_steady:.3f}s (transformer) + {vae_time:.3f}s (VAE) = {total_step:.3f}s")
     print(f"Total time:            {total_h:.1f}h")
     print(f"VAE share of step:     {vae_time / total_step * 100:.0f}%")
     print(f"\nCombined GPU memory (both models loaded): ~{peak_mem + vae_mem:.1f} GiB")
-    print(f"\n--- Precompute Benefit ---")
+    print("\n--- Precompute Benefit ---")
     print(f"Effective speedup: 1 / (1 - {vae_time / total_step:.3f}) = {1 / (1 - vae_time / total_step):.1f}x")
     return avg_steady
 

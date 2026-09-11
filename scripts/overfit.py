@@ -19,7 +19,7 @@ CKPT_DIR = Path("checkpoints/overfit_test")
 
 def main():
     import torch
-    from torch.utils.data import DataLoader, IterableDataset
+    from torch.utils.data import IterableDataset
     from torchvision.utils import make_grid, save_image
     from datasets import load_dataset
 
@@ -27,7 +27,7 @@ def main():
     from mw_jepa.data import decode_jpeg, TESS_REPO
     from mw_jepa.action_tokenizer import parse_lumine_action, KEYBOARD_TOKENS
     from mw_jepa.world_model import MineWorldModel
-    from mw_jepa.trainer import Trainer, collate_stream
+    from mw_jepa.trainer import Trainer
     from mw_jepa.config import load_config
 
     ap = argparse.ArgumentParser()
@@ -109,7 +109,9 @@ def main():
     if action_tokens is None:
         raise RuntimeError(
             "No suitable trajectory found across shards 0-4. "
-            "Try running `scripts/check_dataset.py` to find active shards."
+            "Try running canary Phase 2 "
+            "(`python scripts/canary.py --config configs/stage1_4ctx.yaml`) "
+            "to inspect the action distribution across shards."
         )
 
     # Print action distribution for this trajectory
@@ -118,7 +120,6 @@ def main():
     keyboard_acts = sum(c for t, c in action_counts.items() if t <= 21)
     camera_acts = sum(c for t, c in action_counts.items() if 22 <= t <= 27)
     center_acts = action_counts.get(28, 0)
-    esc_acts = action_counts.get(0, 0)
     print(f"    Keyboard (0-21):    {keyboard_acts} ({100*keyboard_acts/total_acts:.0f}%)")
     if camera_acts:
         print(f"    Camera  (22-27):    {camera_acts} ({100*camera_acts/total_acts:.0f}%)")
@@ -302,8 +303,8 @@ def main():
     grid = make_grid(torch.cat(vis_rows, dim=0), nrow=2)
     save_image(grid, str(CKPT_DIR / "overfit_diagnostics.png"))
     print(f"  Diagnostic grid → {CKPT_DIR}/overfit_diagnostics.png")
-    print(f"  Columns: prediction | error heatmap")
-    print(f"  Rows:    target | correct actions | shuffled actions | copy-paste baseline")
+    print("  Columns: prediction | error heatmap")
+    print("  Rows:    target | correct actions | shuffled actions | copy-paste baseline")
     print()
 
     # ── Results ──

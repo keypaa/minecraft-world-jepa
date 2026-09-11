@@ -1,7 +1,6 @@
 """Data pipeline for Phase 2: Streaming from TESS VLA dataset on HuggingFace."""
 
 from pathlib import Path
-import io
 from typing import Iterator
 
 import numpy as np

@@ -1,7 +1,6 @@
 """Local single-GPU training. Usage: python scripts/train.py --config configs/stage1_4ctx.yaml [--resume ckpt/best.pt]"""
 import argparse
 from pathlib import Path
-import torch
 from mw_jepa.config import load_config
 from mw_jepa.world_model import MineWorldModel
 from mw_jepa.vae import load_vae

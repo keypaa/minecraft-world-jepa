@@ -72,7 +72,7 @@ def main():
     grid = make_grid(comparison, nrow=4)
     save_image(grid, str(CKPT_DIR / "canary_reconstruction.png"))
     print(f"  Reconstruction grid → {CKPT_DIR}/canary_reconstruction.png")
-    print(f"  Rows: original | reconstructed | per-pixel absolute error")
+    print("  Rows: original | reconstructed | per-pixel absolute error")
     print()
 
     # ── Phase 2: Action token distribution ──
