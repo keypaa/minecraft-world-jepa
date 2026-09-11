@@ -140,7 +140,7 @@ class Trainer:
                             "loss": f"{epoch_loss / num_batches:.4f}",
                             "tok/s": f"{tokens_processed / elapsed:.0f}" if elapsed > 0 else "n/a",
                             "GiB": (
-                                f"{torch.cuda.memory_allocated() / (1024 ** 3):.1f}"
+                                f"{torch.cuda.memory_reserved() / (1024 ** 3):.1f}"
                                 if torch.cuda.is_available()
                                 else "n/a"
                             ),
