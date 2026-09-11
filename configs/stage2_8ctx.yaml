@@ -1,5 +1,3 @@
-# Stage 2: 8-frame context
-# 256×256, 8 frames × 256 tokens = 2,048 tokens total
 inherits: base
 context: 8
 lr: 0.0002
@@ -8,12 +6,3 @@ run_name: world-model-stage2-8ctx
 epochs: 3
 lr_reset: true
 resume: best.pt
-
-# 128×128 reference:
-# context: 8
-# lr: 0.0002
-# batch_size: 32
-# run_name: world-model-stage2-8ctx
-# epochs: 3
-# lr_reset: true
-# resume: best.pt

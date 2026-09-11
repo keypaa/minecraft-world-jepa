@@ -1,8 +1,5 @@
-# === CHOSEN RESOLUTION: 256×256 ==============================================
-# SD-VAE downsamples 8× → latent grid 32×32, patch_size=2 → 256 tokens/frame
-# Target: 300M params, visually clean Minecraft output on PRO 6000 ($3.03/h)
-# Cost estimate for all 4 stages: ~$6-8 on PRO 6000
-# =============================================================================
+# Active: 256x256. SD-VAE 8x downsample -> grid 32, patch 2 -> 256 tok/frame.
+# Measured: 338M ctx4 batch32 -> 58.81 GiB peak, 1.25s/step steady (PRO 6000, SDPA).
 model:
   latent_dim: 4
   patch_size: 2
@@ -13,7 +10,6 @@ model:
   max_frames: 32
   num_actions: 29
   action_embed_dim: 512
-
 training:
   weight_decay: 0.05
   betas: [0.9, 0.95]
@@ -21,67 +17,6 @@ training:
   precision: bf16
   log_freq: 100
   save_freq: 1000
-
 data:
   target_size: 256
   chunk_size: 32
-  latent_stats: /volumes/data/latent_stats.pt
-
-vae:
-  model_name: sd-vae
-  ckpt_path: /volumes/vae-checkpoints/vae-finetune-v1.pt
-
-# === 128×128 REFERENCE (original) ============================================
-# SD-VAE downsamples 8× → latent grid 16×16, patch_size=2 → 64 tokens/frame
-# Faster training (~8h total) but blurrier output — blocks visible, no texture detail
-# model:
-#   latent_dim: 4
-#   patch_size: 2
-#   latent_grid_size: 16
-#   embed_dim: 1024
-#   num_blocks: 16
-#   num_heads: 16
-#   max_frames: 32
-#   num_actions: 29
-#   action_embed_dim: 512
-# training:
-#   weight_decay: 0.05
-#   betas: [0.9, 0.95]
-#   grad_clip: 1.0
-#   precision: bf16
-#   log_freq: 100
-#   save_freq: 1000
-# data:
-#   target_size: 128
-#   chunk_size: 32
-#   latent_stats: /volumes/data/latent_stats.pt
-# vae:
-#   model_name: sd-vae
-#   ckpt_path: /volumes/vae-checkpoints/vae-finetune-v1.pt
-
-# === 512×512 REFERENCE (not practical for 300M class) ========================
-# Latent grid 64×64, patch_size=2 → 1024 tokens/frame
-# Needs 1B+ params, multi-GPU (H100:2 min), ~120h training
-# model:
-#   latent_dim: 4
-#   patch_size: 2
-#   latent_grid_size: 64
-#   embed_dim: 2048
-#   num_blocks: 24
-#   num_heads: 16
-#   max_frames: 16
-#   num_actions: 29
-#   action_embed_dim: 512
-# training:
-#   weight_decay: 0.05
-#   betas: [0.9, 0.95]
-#   grad_clip: 1.0
-#   precision: bf16
-#   log_freq: 100
-#   save_freq: 1000
-# data:
-#   target_size: 512
-#   chunk_size: 16
-# vae:
-#   model_name: sd-vae
-#   ckpt_path: /volumes/vae-checkpoints/vae-finetune-v1.pt
