@@ -60,6 +60,10 @@ class Trainer:
         # epochs. Save latest.pt every N steps + optionally mirror to Hub.
         self.save_every_steps = int(train_cfg.get("save_every_steps", 500))
         self.hf_repo_id = train_cfg.get("hf_repo_id") or os.environ.get("HF_HUB_REPO")
+        # Hub push cadence decoupled from local saves: push every Kth
+        # periodic save (uploads are ~3.5GB and synchronous). 1 = every save.
+        self.hf_push_every = max(1, int(train_cfg.get("hf_push_every", 1)))
+        self._periodic_saves = 0
         self.run_name = config.get("run_name", "run")
         self._hub_warned = False
 
@@ -157,7 +161,9 @@ class Trainer:
                     break
                 if self.save_every_steps > 0 and self.step % self.save_every_steps == 0:
                     self.save_latest(epoch_loss / num_batches)
-                    self.maybe_push_to_hub()
+                    self._periodic_saves += 1
+                    if self._periodic_saves % self.hf_push_every == 0:
+                        self.maybe_push_to_hub()
 
             if use_bar:
                 pbar.close()
