@@ -44,6 +44,8 @@ def main():
                     help="torch.compile the model (benchmark first: must match uncompiled loss)")
     ap.add_argument("--max-steps", type=int, default=None,
                     help="cap total optimizer steps (benchmarking / smoke runs)")
+    ap.add_argument("--no-hub", action="store_true",
+                    help="disable Hub mirror for this run (benchmarks, smoke tests)")
     ap.add_argument("--shard-start", type=int, default=0)
     ap.add_argument("--shard-end", type=int, default=10)
     args = ap.parse_args()
@@ -69,6 +71,9 @@ def main():
         print(f"Step estimate unavailable ({e}) — bar will be indeterminate", flush=True)
     ckpt_dir = Path("checkpoints") / cfg.get("run_name", "run")
     trainer = Trainer(model=model, vae=vae, config=cfg, ckpt_dir=ckpt_dir)
+    if args.no_hub:
+        trainer.hf_repo_id = None
+        print("Hub mirror disabled for this run", flush=True)
     if args.resume:
         trainer.load_checkpoint(resolve_resume_arg(args.resume, ckpt_dir),
                                 weights_only=args.reset_optimizer)
