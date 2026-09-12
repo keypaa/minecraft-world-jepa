@@ -78,3 +78,19 @@ future latent-stats work.
 - `make overfit` — must reach final loss < 20% of initial, beat the
   copy-paste baseline, and show shuffled actions hurting loss (proves
   action conditioning is alive).
+
+## Resilience (long runs)
+
+- **Local checkpoints**: `latest.pt` overwritten every 200 steps (~4 min)
+  plus a 300s wall-clock backstop; epoch files + `best.pt` at epoch end.
+  A death costs minutes, never hours.
+- **Hub mirror** (opt-in via `training.hf_repo_id` or `HF_HUB_REPO` +
+  `HF_TOKEN`): async background upload of `latest.pt` (periodic),
+  epoch files + `best.pt` (epoch end). Never blocks or crashes training.
+- **Exact resume**: `python scripts/train.py --config <cfg> --resume
+  checkpoints/<run>/latest.pt` continues with zero repeated or skipped
+  examples (same config required — batch size and shard range are
+  guarded, mismatch aborts). Safe across 12h session caps: stop anywhere,
+  resume anywhere.
+- **Known issue**: canary hangs on exit after `CANARY PASSED` (HF streaming
+  teardown; see issue #1). `Ctrl+C` is safe — all artifacts are saved.

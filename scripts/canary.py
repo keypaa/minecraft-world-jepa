@@ -245,12 +245,39 @@ def main():
     # ── Teardown: free GPU allocations deterministically ──
     # The canary ends with ~8GB live (2x 338M models + VAE + latents).
     # Releasing before return avoids CUDA-teardown hangs on exit.
+    # Only literal `del` statements free CPython function locals —
+    # neither locals().pop() nor exec() can (fast-locals array).
+    # One missing name must not skip the rest.
     try:
-        del model, model2, vae, trainer, trainer2
+        del model
     except NameError:
         pass
     try:
-        del latents, pred, pred2
+        del model2
+    except NameError:
+        pass
+    try:
+        del vae
+    except NameError:
+        pass
+    try:
+        del trainer
+    except NameError:
+        pass
+    try:
+        del trainer2
+    except NameError:
+        pass
+    try:
+        del latents
+    except NameError:
+        pass
+    try:
+        del pred
+    except NameError:
+        pass
+    try:
+        del pred2
     except NameError:
         pass
     torch.cuda.synchronize()

@@ -20,11 +20,13 @@ except ImportError:  # minimal envs: fall back to silent iteration
     tqdm = None
 
 
-def advance_iterator(it, n):
+def advance_iterator(it, n, log_every=0):
     """Consume up to n items from it.
 
     Returns (consumed, exhausted). Pure iterator logic — unit-tested on CPU
     without touching data or CUDA. Used for exact-resume fast-forward.
+    log_every>0 prints progress every N items (skip re-downloads data, so a
+    multi-thousand-batch fast-forward would otherwise look hung).
     """
     consumed = 0
     for _ in range(n):
@@ -33,6 +35,8 @@ def advance_iterator(it, n):
         except StopIteration:
             return consumed, True
         consumed += 1
+        if log_every and consumed % log_every == 0:
+            print(f"  [resume] fast-forward {consumed}/{n} batches…", flush=True)
     return consumed, False
 
 
@@ -83,6 +87,7 @@ class Trainer:
         self.step = 0
         self.epoch_start_step = 0  # global step at which the current epoch began
         self._ckpt_batch_size = None  # guarded on resume: skip math needs identical batching
+        self._ckpt_shards = None  # (shard_start, shard_end): same guard, read off the stream
         self.best_loss = float("inf")
         self.loss_history = []  # tracked per-epoch for diagnostics
         # Crash safety: epoch-only checkpointing loses hours on ~8K-step
@@ -107,6 +112,7 @@ class Trainer:
         # (~7GB) on disk. A fallen-behind uploader skips, never blocks.
         self._hub_queue: queue.Queue = queue.Queue()
         self._hub_thread = None
+        self._hub_seq = 0
         if self.hf_repo_id:
             self._hub_thread = threading.Thread(target=self._hub_worker, daemon=True)
             self._hub_thread.start()
@@ -129,6 +135,16 @@ class Trainer:
                 "skip math assumes identical batching — match the original config"
             )
         self._ckpt_batch_size = batch_size
+        stream_shards = (
+            getattr(stream, "shard_start", None),
+            getattr(stream, "shard_end", None),
+        )
+        if self._ckpt_shards is not None and stream_shards != self._ckpt_shards:
+            raise ValueError(
+                f"shard range changed across resume ({self._ckpt_shards} -> {stream_shards}): "
+                "skip math assumes the identical stream — match the original launch flags"
+            )
+        self._ckpt_shards = stream_shards
         num_patches = getattr(self.model, "num_patches", 256)
 
         for epoch in range(self.epoch, num_epochs):
@@ -161,7 +177,7 @@ class Trainer:
             if resuming:
                 skip_batches = self.step - self.epoch_start_step
                 print(f"  [resume] skipping {skip_batches} already-consumed batches", flush=True)
-                _, epoch_exhausted = advance_iterator(loader_it, skip_batches)
+                _, epoch_exhausted = advance_iterator(loader_it, skip_batches, log_every=1000)
                 if not epoch_exhausted:
                     print(
                         "  [resume] stream repositioned — no example repeated or skipped",
@@ -323,6 +339,7 @@ class Trainer:
             "step": self.step,
             "epoch_start_step": self.epoch_start_step,
             "batch_size": self._ckpt_batch_size,
+            "shard_range": self._ckpt_shards,
             "periodic_saves": self._periodic_saves,
             "loss_history": self.loss_history,
             "loss": loss,
@@ -352,6 +369,7 @@ class Trainer:
             "step": self.step,
             "epoch_start_step": self.epoch_start_step,
             "batch_size": self._ckpt_batch_size,
+            "shard_range": self._ckpt_shards,
             "periodic_saves": self._periodic_saves,
             "loss_history": self.loss_history,
             "loss": running_avg_loss,
@@ -391,7 +409,8 @@ class Trainer:
                 self._hub_warned = True
             return
         try:
-            snapshot = self.ckpt_dir / f"hub_upload_{self.step:07d}_{local.name}"
+            self._hub_seq += 1
+            snapshot = self.ckpt_dir / f"hub_upload_{self.step:07d}_{self._hub_seq}_{local.name}"
             shutil.copy2(local, snapshot)
             self._hub_queue.put((snapshot, hub_path))
             print(f"  [hub] queued {local.name} → {hub_path}", flush=True)
@@ -453,6 +472,7 @@ class Trainer:
                 flush=True,
             )
         self._ckpt_batch_size = ckpt.get("batch_size")
+        self._ckpt_shards = ckpt.get("shard_range")
         self._periodic_saves = ckpt.get("periodic_saves", 0)
         if ckpt.get("loss_history") is not None:
             self.loss_history = ckpt["loss_history"]
