@@ -7,10 +7,36 @@ from mw_jepa.vae import load_vae
 from mw_jepa.data import WorldModelStream
 from mw_jepa.trainer import Trainer
 
+
+def resolve_resume_arg(resume: str, ckpt_dir: Path) -> str:
+    """Local path passthrough, or hf://<owner>/<repo>/<path> Hub download.
+
+    Hub files land under ckpt_dir/_hub/ (cached by huggingface_hub, so a
+    re-resume is free). Auth via HF_TOKEN env var for private repos.
+    """
+    if Path(resume).exists():
+        return resume
+    if resume.startswith("hf://"):
+        from huggingface_hub import hf_hub_download
+
+        rest = resume[len("hf://"):]
+        parts = rest.split("/")
+        if len(parts) < 3:
+            raise ValueError(f"Bad Hub resume path (want hf://owner/repo/file): {resume}")
+        repo_id, filename = "/".join(parts[:2]), "/".join(parts[2:])
+        local = hf_hub_download(
+            repo_id=repo_id, filename=filename,
+            local_dir=ckpt_dir / "_hub", local_dir_use_symlinks=False,
+        )
+        print(f"Downloaded Hub checkpoint → {local}", flush=True)
+        return local
+    raise FileNotFoundError(f"Resume checkpoint not found: {resume}")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
-    ap.add_argument("--resume", default=None)
+    ap.add_argument("--resume", default=None,
+                    help="local path or hf://owner/repo/path (downloaded, cached)")
     ap.add_argument("--reset-optimizer", action="store_true",
                     help="load only model weights (fresh optimizer/scheduler). "
                          "Use for cross-stage resume where the LR schedule restarts.")
@@ -44,7 +70,8 @@ def main():
     ckpt_dir = Path("checkpoints") / cfg.get("run_name", "run")
     trainer = Trainer(model=model, vae=vae, config=cfg, ckpt_dir=ckpt_dir)
     if args.resume:
-        trainer.load_checkpoint(args.resume, weights_only=args.reset_optimizer)
+        trainer.load_checkpoint(resolve_resume_arg(args.resume, ckpt_dir),
+                                weights_only=args.reset_optimizer)
     trainer.train(stream, batch_size=batch_size, num_epochs=cfg.get("epochs", 2),
                   max_steps=args.max_steps, total_steps_hint=hint)
 
