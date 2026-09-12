@@ -85,7 +85,10 @@ class Trainer:
             self._hub_thread = threading.Thread(target=self._hub_worker, daemon=True)
             self._hub_thread.start()
 
-    def train(self, stream, batch_size=8, num_epochs=10, steps_per_epoch=None, max_steps=None):
+    def train(self, stream, batch_size=8, num_epochs=10, steps_per_epoch=None, max_steps=None,
+              total_steps_hint=None):
+        """Train. total_steps_hint feeds the tqdm total ONLY — it never caps
+        training (an undercount must not cut data). steps_per_epoch caps."""
         self.model.train()
         num_patches = getattr(self.model, "num_patches", 256)
 
@@ -135,7 +138,7 @@ class Trainer:
                     loader_it,
                     desc=f"Epoch {epoch + 1}/{num_epochs}",
                     unit="step",
-                    total=steps_per_epoch,
+                    total=steps_per_epoch if steps_per_epoch is not None else total_steps_hint,
                     mininterval=1.0,
                     leave=True,
                 )

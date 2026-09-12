@@ -16,6 +16,32 @@ TESS_SHARDS = 303
 DEFAULT_TARGET_SIZE = 256
 
 
+def estimate_sequences(shard_start: int, shard_end: int, sequence_length: int) -> int | None:
+    """Estimate sliding-window sequences from parquet footers (no download).
+
+    Reads only file metadata (row counts) via HTTP range requests — seconds,
+    not the minutes/hours a full decode pass would cost. Approximation:
+    rows // stride per shard, ignoring trajectory-boundary losses (<2% for
+    long trajectories). Returns None on any failure (caller falls back to
+    an indeterminate bar). NEVER use as a training cap — only a tqdm total.
+    """
+    try:
+        import pyarrow.parquet as pq
+        from huggingface_hub import HfFileSystem
+
+        fs = HfFileSystem()
+        stride = max(1, (sequence_length + 1) // 2)
+        total = 0
+        for shard in range(shard_start, shard_end):
+            path = f"{TESS_REPO}/data/shard_{shard:05d}.parquet"
+            with fs.open(path, "rb") as f:
+                meta = pq.ParquetFile(f).metadata
+            total += meta.num_rows // stride
+        return total if total > 0 else None
+    except Exception:
+        return None
+
+
 def decode_jpeg(image_bytes: bytes, target_size: int = DEFAULT_TARGET_SIZE) -> torch.Tensor:
     """Decode JPEG bytes to [3, H, W] float tensor normalized [0, 1]."""
     import cv2
