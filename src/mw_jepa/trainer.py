@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+import itertools
 import os
 import queue
 import shutil
@@ -17,6 +18,22 @@ try:
     from tqdm import tqdm
 except ImportError:  # minimal envs: fall back to silent iteration
     tqdm = None
+
+
+def advance_iterator(it, n):
+    """Consume up to n items from it.
+
+    Returns (consumed, exhausted). Pure iterator logic — unit-tested on CPU
+    without touching data or CUDA. Used for exact-resume fast-forward.
+    """
+    consumed = 0
+    for _ in range(n):
+        try:
+            next(it)
+        except StopIteration:
+            return consumed, True
+        consumed += 1
+    return consumed, False
 
 
 def collate_stream(batch):
@@ -38,6 +55,13 @@ class Trainer:
         self.config = config
         self.ckpt_dir = ckpt_dir
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
+        # A crash between snapshot and upload leaves hub_upload_* orphans;
+        # they are never valid checkpoints — sweep them on startup.
+        for stale in self.ckpt_dir.glob("hub_upload_*.pt"):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
         train_cfg = config.get("training", {})
         data_cfg = config.get("data", {})
         model_cfg = config.get("model", {})
@@ -58,6 +82,7 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         self.epoch_start_step = 0  # global step at which the current epoch began
+        self._ckpt_batch_size = None  # guarded on resume: skip math needs identical batching
         self.best_loss = float("inf")
         self.loss_history = []  # tracked per-epoch for diagnostics
         # Crash safety: epoch-only checkpointing loses hours on ~8K-step
@@ -77,19 +102,33 @@ class Trainer:
         # Async Hub mirror: uploads run on a daemon worker so the training
         # loop never stalls on network. Snapshots keep Hub == local content
         # (no torn reads if the next save overwrites latest.pt mid-upload).
-        # Bounded queue (2 snapshots ≈ 7GB worst case) is the backpressure:
-        # a fallen-behind uploader skips, never grows disk unboundedly.
+        # Backpressure is enforced at enqueue time (skip when >=2 pending),
+        # so the unbounded queue never actually grows: worst case 2 snapshots
+        # (~7GB) on disk. A fallen-behind uploader skips, never blocks.
         self._hub_queue: queue.Queue = queue.Queue()
         self._hub_thread = None
         if self.hf_repo_id:
             self._hub_thread = threading.Thread(target=self._hub_worker, daemon=True)
             self._hub_thread.start()
 
-    def train(self, stream, batch_size=8, num_epochs=10, steps_per_epoch=None, max_steps=None,
-              total_steps_hint=None):
+    def train(
+        self,
+        stream,
+        batch_size=8,
+        num_epochs=10,
+        steps_per_epoch=None,
+        max_steps=None,
+        total_steps_hint=None,
+    ):
         """Train. total_steps_hint feeds the tqdm total ONLY — it never caps
         training (an undercount must not cut data). steps_per_epoch caps."""
         self.model.train()
+        if self._ckpt_batch_size is not None and self._ckpt_batch_size != batch_size:
+            raise ValueError(
+                f"batch_size changed across resume ({self._ckpt_batch_size} -> {batch_size}): "
+                "skip math assumes identical batching — match the original config"
+            )
+        self._ckpt_batch_size = batch_size
         num_patches = getattr(self.model, "num_patches", 256)
 
         for epoch in range(self.epoch, num_epochs):
@@ -122,15 +161,17 @@ class Trainer:
             if resuming:
                 skip_batches = self.step - self.epoch_start_step
                 print(f"  [resume] skipping {skip_batches} already-consumed batches", flush=True)
-                for _ in range(skip_batches):
-                    try:
-                        next(loader_it)
-                    except StopIteration:
-                        # Died at/after the last batch: epoch is fully consumed.
-                        epoch_exhausted = True
-                        break
+                _, epoch_exhausted = advance_iterator(loader_it, skip_batches)
                 if not epoch_exhausted:
-                    print("  [resume] stream repositioned — no example repeated or skipped", flush=True)
+                    print(
+                        "  [resume] stream repositioned — no example repeated or skipped",
+                        flush=True,
+                    )
+            if steps_per_epoch is not None:
+                # Cap via islice BEFORE pulling: the old in-loop break consumed
+                # one batch too many, breaking the 1-step == 1-batch invariant
+                # the resume math depends on (audit Important).
+                loader_it = itertools.islice(loader_it, steps_per_epoch)
 
             use_bar = tqdm is not None
             pbar = (
@@ -146,8 +187,6 @@ class Trainer:
                 else loader_it
             )
             for batch in pbar:
-                if steps_per_epoch is not None and num_batches >= steps_per_epoch:
-                    break
                 actions = batch["actions"].cuda()
                 assert_action_tensor(actions, name="batch actions")
 
@@ -197,13 +236,14 @@ class Trainer:
                             "loss": f"{epoch_loss / num_batches:.4f}",
                             "tok/s": f"{tokens_processed / elapsed:.0f}" if elapsed > 0 else "n/a",
                             "GiB": (
-                                f"{torch.cuda.memory_reserved() / (1024 ** 3):.1f}"
+                                f"{torch.cuda.memory_reserved() / (1024**3):.1f}"
                                 if torch.cuda.is_available()
                                 else "n/a"
                             ),
                         }
                     )
                 if max_steps is not None and self.step >= max_steps:
+                    self.save_latest(epoch_loss / num_batches)
                     break
                 if self.save_every_steps > 0 and self.step % self.save_every_steps == 0:
                     self.save_latest(epoch_loss / num_batches)
@@ -240,7 +280,6 @@ class Trainer:
             gpu_mem = torch.cuda.max_memory_allocated() / (1024 ** 3) if torch.cuda.is_available() else 0
 
             avg_loss = epoch_loss / num_batches
-            self.epoch = epoch
             self.loss_history.append(avg_loss)
             print(
                 f"Epoch {epoch + 1}/{num_epochs} — Loss: {avg_loss:.6f} | "
@@ -250,10 +289,16 @@ class Trainer:
             )
             torch.cuda.reset_peak_memory_stats()
             prev_best = self.best_loss
-            self.save_checkpoint(avg_loss)
+            # Advance BEFORE saving: the checkpoint describes completed epoch E
+            # and resumes at epoch E+1 with zero batches consumed in it.
+            # Storing self.epoch=E would re-enter E on resume, skip the full
+            # epoch, find zero batches, and crash (audit Critical #1).
+            self.epoch = epoch + 1
+            self.epoch_start_step = self.step
+            self.save_checkpoint(avg_loss, epoch_label=epoch)
             # Mirror everything irreplaceable: epoch file always, best.pt on
             # improvement. A dead container then loses nothing at all.
-            epoch_name = f"epoch_{self.epoch:04d}_loss_{avg_loss:.6f}.pt"
+            epoch_name = f"epoch_{epoch:04d}_loss_{avg_loss:.6f}.pt"
             self._enqueue_hub_mirror(self.ckpt_dir / epoch_name, f"{self.run_name}/{epoch_name}")
             if avg_loss < prev_best:
                 self._enqueue_hub_mirror(self.ckpt_dir / "best.pt", f"{self.run_name}/best.pt")
@@ -261,7 +306,15 @@ class Trainer:
             if max_steps is not None and self.step >= max_steps:
                 break
 
-    def save_checkpoint(self, loss):
+    @staticmethod
+    def _atomic_save(obj, path: Path):
+        """torch.save via tmp+rename: a kill mid-write never leaves a torn file."""
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        torch.save(obj, tmp)
+        os.replace(tmp, path)
+
+    def save_checkpoint(self, loss, epoch_label=None):
+        label = self.epoch if epoch_label is None else epoch_label
         ckpt = {
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
@@ -269,18 +322,21 @@ class Trainer:
             "epoch": self.epoch,
             "step": self.step,
             "epoch_start_step": self.epoch_start_step,
+            "batch_size": self._ckpt_batch_size,
+            "periodic_saves": self._periodic_saves,
+            "loss_history": self.loss_history,
             "loss": loss,
             "best_loss": min(loss, self.best_loss),
             "config": self.config,
         }
-        path = self.ckpt_dir / f"epoch_{self.epoch:04d}_loss_{loss:.6f}.pt"
-        torch.save(ckpt, path)
+        path = self.ckpt_dir / f"epoch_{label:04d}_loss_{loss:.6f}.pt"
+        self._atomic_save(ckpt, path)
 
         if loss < self.best_loss:
             self.best_loss = loss
-            torch.save(ckpt, self.ckpt_dir / "best.pt")
+            self._atomic_save(ckpt, self.ckpt_dir / "best.pt")
 
-        torch.save(ckpt, self.ckpt_dir / "latest.pt")
+        self._atomic_save(ckpt, self.ckpt_dir / "latest.pt")
 
     def save_latest(self, running_avg_loss: float):
         """Overwrite latest.pt with current state (cheap periodic safety net).
@@ -295,11 +351,14 @@ class Trainer:
             "epoch": self.epoch,
             "step": self.step,
             "epoch_start_step": self.epoch_start_step,
+            "batch_size": self._ckpt_batch_size,
+            "periodic_saves": self._periodic_saves,
+            "loss_history": self.loss_history,
             "loss": running_avg_loss,
             "best_loss": self.best_loss,
             "config": self.config,
         }
-        torch.save(ckpt, self.ckpt_dir / "latest.pt")
+        self._atomic_save(ckpt, self.ckpt_dir / "latest.pt")
         print(f"  [ckpt] step {self.step} → latest.pt (loss {running_avg_loss:.4f})", flush=True)
 
     def maybe_push_to_hub(self):
@@ -325,7 +384,10 @@ class Trainer:
             return
         if self._hub_queue.qsize() >= 2:
             if not self._hub_warned:
-                print("  [hub] uploader backlogged, skipping push (local ckpt unaffected)", flush=True)
+                print(
+                    "  [hub] uploader backlogged, skipping push (local ckpt unaffected)",
+                    flush=True,
+                )
                 self._hub_warned = True
             return
         try:
@@ -337,13 +399,18 @@ class Trainer:
             print(f"  [hub] snapshot failed (continuing locally): {e}", flush=True)
 
     def _hub_worker(self):
-        """Daemon: upload enqueued snapshots to their Hub paths."""
-        from huggingface_hub import HfApi
+        """Daemon: upload enqueued snapshots to their Hub paths.
 
-        api = HfApi()
+        The client is (re)built inside the guarded region on every upload:
+        a throwing constructor must never kill the worker, or the next
+        flush_hub() join() would hang the run forever (audit Critical #3).
+        """
         while True:
             snapshot, hub_path = self._hub_queue.get()
             try:
+                from huggingface_hub import HfApi
+
+                api = HfApi()
                 api.upload_file(
                     path_or_fileobj=str(snapshot),
                     path_in_repo=hub_path,
@@ -364,6 +431,7 @@ class Trainer:
         """Block until all queued uploads finish. Call at epoch end."""
         if self._hub_thread is not None:
             self._hub_queue.join()
+            self._hub_warned = False  # drained: future drops warn again
 
     def load_checkpoint(self, path: str):
         ckpt = torch.load(path, map_location="cuda", weights_only=False)  # trusted local checkpoint
@@ -373,9 +441,21 @@ class Trainer:
             self.scheduler.load_state_dict(ckpt["scheduler"])
         self.epoch = ckpt["epoch"]
         self.step = ckpt["step"]
-        # .get() for backward compat with pre-exact-resume checkpoints
-        # (which restart the epoch from 0 — the old biased behavior).
-        self.epoch_start_step = ckpt.get("epoch_start_step", 0)
+        # Pre-exact-resume checkpoints lack the key: restart the stored epoch
+        # from 0 (biased re-read, but safe) instead of skipping step-many
+        # batches (which would silently eat whole epochs).
+        if "epoch_start_step" in ckpt:
+            self.epoch_start_step = ckpt["epoch_start_step"]
+        else:
+            self.epoch_start_step = self.step
+            print(
+                "  [resume] old checkpoint without stream position — restarting stored epoch",
+                flush=True,
+            )
+        self._ckpt_batch_size = ckpt.get("batch_size")
+        self._periodic_saves = ckpt.get("periodic_saves", 0)
+        if ckpt.get("loss_history") is not None:
+            self.loss_history = ckpt["loss_history"]
         if ckpt.get("best_loss") is not None:
             self.best_loss = ckpt["best_loss"]
         print(
