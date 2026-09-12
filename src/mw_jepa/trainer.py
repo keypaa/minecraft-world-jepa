@@ -57,6 +57,7 @@ class Trainer:
 
         self.epoch = 0
         self.step = 0
+        self.epoch_start_step = 0  # global step at which the current epoch began
         self.best_loss = float("inf")
         self.loss_history = []  # tracked per-epoch for diagnostics
         # Crash safety: epoch-only checkpointing loses hours on ~8K-step
@@ -89,6 +90,14 @@ class Trainer:
         num_patches = getattr(self.model, "num_patches", 256)
 
         for epoch in range(self.epoch, num_epochs):
+            # Exact resume: the interrupted epoch restarts its stream from the
+            # beginning, so fast-forward past batches already consumed in it.
+            # drop_last=True guarantees 1 optimizer step == 1 batch, hence
+            # batches-to-skip == steps-taken-in-epoch. Same config + same
+            # deterministic stream order ⇒ zero repeated or skipped examples.
+            resuming = epoch == self.epoch and self.step > self.epoch_start_step
+            if not resuming:
+                self.epoch_start_step = self.step
             loader = DataLoader(
                 stream,
                 batch_size=batch_size,
@@ -105,10 +114,25 @@ class Trainer:
             if self._last_save_time is None:
                 self._last_save_time = epoch_start
 
+            loader_it = iter(loader)
+            epoch_exhausted = False
+            if resuming:
+                skip_batches = self.step - self.epoch_start_step
+                print(f"  [resume] skipping {skip_batches} already-consumed batches", flush=True)
+                for _ in range(skip_batches):
+                    try:
+                        next(loader_it)
+                    except StopIteration:
+                        # Died at/after the last batch: epoch is fully consumed.
+                        epoch_exhausted = True
+                        break
+                if not epoch_exhausted:
+                    print("  [resume] stream repositioned — no example repeated or skipped", flush=True)
+
             use_bar = tqdm is not None
             pbar = (
                 tqdm(
-                    loader,
+                    loader_it,
                     desc=f"Epoch {epoch + 1}/{num_epochs}",
                     unit="step",
                     total=steps_per_epoch,
@@ -116,7 +140,7 @@ class Trainer:
                     leave=True,
                 )
                 if use_bar
-                else loader
+                else loader_it
             )
             for batch in pbar:
                 if steps_per_epoch is not None and num_batches >= steps_per_epoch:
@@ -199,6 +223,11 @@ class Trainer:
             if use_bar:
                 pbar.close()
 
+            if epoch_exhausted:
+                print(f"  [resume] epoch {epoch + 1} was fully consumed — advancing", flush=True)
+                self.epoch = epoch + 1
+                continue
+
             if num_batches == 0:
                 raise ValueError("Training stream produced no batches")
 
@@ -229,6 +258,7 @@ class Trainer:
             "scheduler": self.scheduler.state_dict(),
             "epoch": self.epoch,
             "step": self.step,
+            "epoch_start_step": self.epoch_start_step,
             "loss": loss,
             "best_loss": min(loss, self.best_loss),
             "config": self.config,
@@ -254,6 +284,7 @@ class Trainer:
             "scheduler": self.scheduler.state_dict(),
             "epoch": self.epoch,
             "step": self.step,
+            "epoch_start_step": self.epoch_start_step,
             "loss": running_avg_loss,
             "best_loss": self.best_loss,
             "config": self.config,
@@ -323,9 +354,15 @@ class Trainer:
             self.scheduler.load_state_dict(ckpt["scheduler"])
         self.epoch = ckpt["epoch"]
         self.step = ckpt["step"]
+        # .get() for backward compat with pre-exact-resume checkpoints
+        # (which restart the epoch from 0 — the old biased behavior).
+        self.epoch_start_step = ckpt.get("epoch_start_step", 0)
         if ckpt.get("best_loss") is not None:
             self.best_loss = ckpt["best_loss"]
-        print(f"Resumed from epoch {self.epoch} (step {self.step}, loss {ckpt['loss']:.6f})")
+        print(
+            f"Resumed from epoch {self.epoch} (step {self.step}, "
+            f"epoch_start_step {self.epoch_start_step}, loss {ckpt['loss']:.6f})"
+        )
 
 
 def get_training_schedule():
