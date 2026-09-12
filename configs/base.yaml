@@ -17,9 +17,10 @@ training:
   precision: bf16
   log_freq: 100
   save_freq: 1000
-  save_every_steps: 500  # overwrite latest.pt this often (~10 min at 1.2s/step)
+  save_every_steps: 200  # overwrite latest.pt this often (~4 min at 1.2s/step)
+  save_every_seconds: 300  # wall-clock backstop: save at least this often even mid-stall
   # hf_repo_id: "keypaa/minecraft-world-jepa-ckpts"  # + HF_TOKEN env: mirror latest.pt to Hub
-  # hf_push_every: 4  # push every Kth periodic save (local saves stay every 500 steps)
+  # hf_push_every: 4  # push every Kth periodic save (local saves stay frequent)
 data:
   target_size: 256
   chunk_size: 32

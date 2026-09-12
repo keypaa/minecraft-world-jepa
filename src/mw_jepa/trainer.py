@@ -58,7 +58,11 @@ class Trainer:
         self.loss_history = []  # tracked per-epoch for diagnostics
         # Crash safety: epoch-only checkpointing loses hours on ~8K-step
         # epochs. Save latest.pt every N steps + optionally mirror to Hub.
-        self.save_every_steps = int(train_cfg.get("save_every_steps", 500))
+        self.save_every_steps = int(train_cfg.get("save_every_steps", 200))
+        # Wall-clock backstop: checkpoint at least this often even if steps
+        # stall (network/dataloader). 0 disables the time trigger.
+        self.save_every_seconds = float(train_cfg.get("save_every_seconds", 300))
+        self._last_save_time = None
         self.hf_repo_id = train_cfg.get("hf_repo_id") or os.environ.get("HF_HUB_REPO")
         # Hub push cadence decoupled from local saves: push every Kth
         # periodic save (uploads are ~3.5GB and synchronous). 1 = every save.
@@ -85,6 +89,8 @@ class Trainer:
             num_batches = 0
             tokens_processed = 0
             epoch_start = time.time()
+            if self._last_save_time is None:
+                self._last_save_time = epoch_start
 
             use_bar = tqdm is not None
             pbar = (
@@ -162,6 +168,18 @@ class Trainer:
                 if self.save_every_steps > 0 and self.step % self.save_every_steps == 0:
                     self.save_latest(epoch_loss / num_batches)
                     self._periodic_saves += 1
+                    self._last_save_time = time.time()
+                    if self._periodic_saves % self.hf_push_every == 0:
+                        self.maybe_push_to_hub()
+                elif (
+                    self.save_every_seconds > 0
+                    and self._last_save_time is not None
+                    and (time.time() - self._last_save_time) >= self.save_every_seconds
+                ):
+                    # Step trigger missed (stalls) but wall clock says save.
+                    self.save_latest(epoch_loss / num_batches)
+                    self._periodic_saves += 1
+                    self._last_save_time = time.time()
                     if self._periodic_saves % self.hf_push_every == 0:
                         self.maybe_push_to_hub()
 
