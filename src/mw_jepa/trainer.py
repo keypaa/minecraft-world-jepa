@@ -1,6 +1,9 @@
 import time
 from pathlib import Path
 import os
+import queue
+import shutil
+import threading
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -70,6 +73,16 @@ class Trainer:
         self._periodic_saves = 0
         self.run_name = config.get("run_name", "run")
         self._hub_warned = False
+        # Async Hub mirror: uploads run on a daemon worker so the training
+        # loop never stalls on network. Snapshots keep Hub == local content
+        # (no torn reads if the next save overwrites latest.pt mid-upload).
+        # Bounded queue (2 snapshots ≈ 7GB worst case) is the backpressure:
+        # a fallen-behind uploader skips, never grows disk unboundedly.
+        self._hub_queue: queue.Queue = queue.Queue()
+        self._hub_thread = None
+        if self.hf_repo_id:
+            self._hub_thread = threading.Thread(target=self._hub_worker, daemon=True)
+            self._hub_thread.start()
 
     def train(self, stream, batch_size=8, num_epochs=10, steps_per_epoch=None, max_steps=None):
         self.model.train()
@@ -205,6 +218,7 @@ class Trainer:
             )
             torch.cuda.reset_peak_memory_stats()
             self.save_checkpoint(avg_loss)
+            self.flush_hub()
             if max_steps is not None and self.step >= max_steps:
                 break
 
@@ -248,30 +262,58 @@ class Trainer:
         print(f"  [ckpt] step {self.step} → latest.pt (loss {running_avg_loss:.4f})", flush=True)
 
     def maybe_push_to_hub(self):
-        """Mirror latest.pt to the HuggingFace Hub (best-effort, never fatal).
+        """Enqueue a Hub mirror of latest.pt (async, best-effort, never fatal).
 
         Enabled by training.hf_repo_id in config or HF_HUB_REPO env var.
         Auth via HF_TOKEN env var (HfApi picks it up automatically).
-        Covers total local-disk loss (ephemeral sandboxes): resume anywhere
-        with scripts/train.py --resume <downloaded latest.pt>.
+        Snapshots to latest_push.pt first so the upload is byte-identical to
+        the local checkpoint even if the next save lands mid-upload.
+        If the uploader is backlogged (>2 pending), the push is skipped with
+        a warning — local latest.pt is always the source of truth.
         """
-        if not self.hf_repo_id:
+        if not self.hf_repo_id or self._hub_thread is None:
+            return
+        if self._hub_queue.qsize() >= 2:
+            if not self._hub_warned:
+                print("  [hub] uploader backlogged, skipping push (local ckpt unaffected)", flush=True)
+                self._hub_warned = True
             return
         try:
-            from huggingface_hub import HfApi
-
-            api = HfApi()
-            api.upload_file(
-                path_or_fileobj=str(self.ckpt_dir / "latest.pt"),
-                path_in_repo=f"{self.run_name}/latest.pt",
-                repo_id=self.hf_repo_id,
-                repo_type="model",
-            )
-            print(f"  [hub] pushed step {self.step} → {self.hf_repo_id}:{self.run_name}/latest.pt", flush=True)
+            snapshot = self.ckpt_dir / f"latest_push_{self.step:07d}.pt"
+            shutil.copy2(self.ckpt_dir / "latest.pt", snapshot)
+            self._hub_queue.put(snapshot)
+            print(f"  [hub] queued step {self.step} for upload", flush=True)
         except Exception as e:
-            if not self._hub_warned:
-                print(f"  [hub] push failed (continuing locally): {e}", flush=True)
-                self._hub_warned = True
+            print(f"  [hub] snapshot failed (continuing locally): {e}", flush=True)
+
+    def _hub_worker(self):
+        """Daemon: upload enqueued snapshots to latest.pt on the Hub."""
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        while True:
+            snapshot = self._hub_queue.get()
+            try:
+                api.upload_file(
+                    path_or_fileobj=str(snapshot),
+                    path_in_repo=f"{self.run_name}/latest.pt",
+                    repo_id=self.hf_repo_id,
+                    repo_type="model",
+                )
+                print(f"  [hub] mirrored → {self.hf_repo_id}:{self.run_name}/latest.pt", flush=True)
+            except Exception as e:
+                print(f"  [hub] upload failed (local ckpt unaffected): {e}", flush=True)
+            finally:
+                try:
+                    os.remove(snapshot)
+                except OSError:
+                    pass
+                self._hub_queue.task_done()
+
+    def flush_hub(self):
+        """Block until all queued uploads finish. Call at epoch end."""
+        if self._hub_thread is not None:
+            self._hub_queue.join()
 
     def load_checkpoint(self, path: str):
         ckpt = torch.load(path, map_location="cuda", weights_only=False)  # trusted local checkpoint
