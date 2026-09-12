@@ -13,6 +13,7 @@ model:
 training:
   weight_decay: 0.05
   betas: [0.9, 0.95]
+  fused_optimizer: true  # CUDA fused AdamW; validated in stage-1 shootout before stage 2
   grad_clip: 1.0
   precision: bf16
   log_freq: 100

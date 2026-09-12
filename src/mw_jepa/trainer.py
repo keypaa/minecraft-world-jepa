@@ -78,6 +78,7 @@ class Trainer:
             lr=config.get("lr", 3e-4),
             weight_decay=train_cfg.get("weight_decay", config.get("weight_decay", 0.05)),
             betas=tuple(train_cfg.get("betas", (0.9, 0.95))),
+            fused=train_cfg.get("fused_optimizer", True),  # CUDA-only codebase; ~few % per step
         )
         # heuristic: epochs*1000 steps; pass explicit T_max via config["training"]["t_max"] if set
         t_max = train_cfg.get("t_max", max(1, config.get("epochs", 10) * 1000))
@@ -452,9 +453,26 @@ class Trainer:
             self._hub_queue.join()
             self._hub_warned = False  # drained: future drops warn again
 
-    def load_checkpoint(self, path: str):
+    def load_checkpoint(self, path: str, weights_only: bool = False):
+        """Load a checkpoint. weights_only=True loads just the model (fresh
+        optimizer/scheduler/counters) — for cross-stage resume where the LR
+        schedule restarts (stage files' lr_reset)."""
         ckpt = torch.load(path, map_location="cuda", weights_only=False)  # trusted local checkpoint
-        self.model.load_state_dict(ckpt["model"])
+        state = ckpt["model"]
+        # torch.compile prefixes state_dict keys with "_orig_mod.". Checkpoints
+        # and models can mix compiled/uncompiled across stages — normalize.
+        own_keys = list(self.model.state_dict().keys())
+        if state and own_keys:
+            ckpt_prefixed = next(iter(state)).startswith("_orig_mod.")
+            own_prefixed = own_keys[0].startswith("_orig_mod.")
+            if ckpt_prefixed and not own_prefixed:
+                state = {k.removeprefix("_orig_mod."): v for k, v in state.items()}
+            elif own_prefixed and not ckpt_prefixed:
+                state = {"_orig_mod." + k: v for k, v in state.items()}
+        self.model.load_state_dict(state)
+        if weights_only:
+            print(f"Loaded model weights from {path} (fresh optimizer/scheduler)", flush=True)
+            return
         self.optimizer.load_state_dict(ckpt["optimizer"])
         if ckpt.get("scheduler") is not None:
             self.scheduler.load_state_dict(ckpt["scheduler"])
