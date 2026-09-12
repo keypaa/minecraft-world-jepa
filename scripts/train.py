@@ -46,6 +46,8 @@ def main():
                     help="cap total optimizer steps (benchmarking / smoke runs)")
     ap.add_argument("--no-hub", action="store_true",
                     help="disable Hub mirror for this run (benchmarks, smoke tests)")
+    ap.add_argument("--ckpt-dir", default=None,
+                    help="override checkpoint dir (benchmarks: keep stage dirs pristine)")
     ap.add_argument("--shard-start", type=int, default=0)
     ap.add_argument("--shard-end", type=int, default=10)
     args = ap.parse_args()
@@ -69,7 +71,7 @@ def main():
             print(f"Estimated ~{hint} steps/epoch from shard metadata (bar only)", flush=True)
     except Exception as e:
         print(f"Step estimate unavailable ({e}) — bar will be indeterminate", flush=True)
-    ckpt_dir = Path("checkpoints") / cfg.get("run_name", "run")
+    ckpt_dir = Path(args.ckpt_dir) if args.ckpt_dir else Path("checkpoints") / cfg.get("run_name", "run")
     trainer = Trainer(model=model, vae=vae, config=cfg, ckpt_dir=ckpt_dir)
     if args.no_hub:
         trainer.hf_repo_id = None
