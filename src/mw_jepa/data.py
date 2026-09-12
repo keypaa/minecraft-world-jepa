@@ -27,15 +27,18 @@ def estimate_sequences(shard_start: int, shard_end: int, sequence_length: int) -
     """
     try:
         import pyarrow.parquet as pq
-        from huggingface_hub import HfFileSystem
+        import fsspec
 
-        fs = HfFileSystem()
         stride = max(1, (sequence_length + 1) // 2)
         total = 0
         for shard in range(shard_start, shard_end):
-            path = f"{TESS_REPO}/data/shard_{shard:05d}.parquet"
-            with fs.open(path, "rb") as f:
-                meta = pq.ParquetFile(f).metadata
+            url = (
+                f"https://huggingface.co/datasets/{TESS_REPO}/resolve/main"
+                f"/data/shard_{shard:05d}.parquet"
+            )
+            with fsspec.open(url, mode="rb") as of:
+                with of as f:
+                    meta = pq.ParquetFile(f).metadata
             total += meta.num_rows // stride
         return total if total > 0 else None
     except Exception:
