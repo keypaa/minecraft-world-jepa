@@ -246,7 +246,14 @@ class Trainer:
                 flush=True,
             )
             torch.cuda.reset_peak_memory_stats()
+            prev_best = self.best_loss
             self.save_checkpoint(avg_loss)
+            # Mirror everything irreplaceable: epoch file always, best.pt on
+            # improvement. A dead container then loses nothing at all.
+            epoch_name = f"epoch_{self.epoch:04d}_loss_{avg_loss:.6f}.pt"
+            self._enqueue_hub_mirror(self.ckpt_dir / epoch_name, f"{self.run_name}/{epoch_name}")
+            if avg_loss < prev_best:
+                self._enqueue_hub_mirror(self.ckpt_dir / "best.pt", f"{self.run_name}/best.pt")
             self.flush_hub()
             if max_steps is not None and self.step >= max_steps:
                 break
@@ -297,10 +304,19 @@ class Trainer:
 
         Enabled by training.hf_repo_id in config or HF_HUB_REPO env var.
         Auth via HF_TOKEN env var (HfApi picks it up automatically).
-        Snapshots to latest_push.pt first so the upload is byte-identical to
-        the local checkpoint even if the next save lands mid-upload.
+        See _enqueue_hub_mirror for snapshot/backpressure semantics.
+        """
+        if not self.hf_repo_id or self._hub_thread is None:
+            return
+        self._enqueue_hub_mirror(self.ckpt_dir / "latest.pt", f"{self.run_name}/latest.pt")
+
+    def _enqueue_hub_mirror(self, local: Path, hub_path: str):
+        """Snapshot a local file and queue it for async Hub upload.
+
+        Snapshots (not the live file) are uploaded, so a concurrent local
+        overwrite (latest.pt, best.pt) can never cause a torn Hub read.
         If the uploader is backlogged (>2 pending), the push is skipped with
-        a warning — local latest.pt is always the source of truth.
+        a warning — local files are always the source of truth.
         """
         if not self.hf_repo_id or self._hub_thread is None:
             return
@@ -310,28 +326,28 @@ class Trainer:
                 self._hub_warned = True
             return
         try:
-            snapshot = self.ckpt_dir / f"latest_push_{self.step:07d}.pt"
-            shutil.copy2(self.ckpt_dir / "latest.pt", snapshot)
-            self._hub_queue.put(snapshot)
-            print(f"  [hub] queued step {self.step} for upload", flush=True)
+            snapshot = self.ckpt_dir / f"hub_upload_{self.step:07d}_{local.name}"
+            shutil.copy2(local, snapshot)
+            self._hub_queue.put((snapshot, hub_path))
+            print(f"  [hub] queued {local.name} → {hub_path}", flush=True)
         except Exception as e:
             print(f"  [hub] snapshot failed (continuing locally): {e}", flush=True)
 
     def _hub_worker(self):
-        """Daemon: upload enqueued snapshots to latest.pt on the Hub."""
+        """Daemon: upload enqueued snapshots to their Hub paths."""
         from huggingface_hub import HfApi
 
         api = HfApi()
         while True:
-            snapshot = self._hub_queue.get()
+            snapshot, hub_path = self._hub_queue.get()
             try:
                 api.upload_file(
                     path_or_fileobj=str(snapshot),
-                    path_in_repo=f"{self.run_name}/latest.pt",
+                    path_in_repo=hub_path,
                     repo_id=self.hf_repo_id,
                     repo_type="model",
                 )
-                print(f"  [hub] mirrored → {self.hf_repo_id}:{self.run_name}/latest.pt", flush=True)
+                print(f"  [hub] mirrored → {self.hf_repo_id}:{hub_path}", flush=True)
             except Exception as e:
                 print(f"  [hub] upload failed (local ckpt unaffected): {e}", flush=True)
             finally:
